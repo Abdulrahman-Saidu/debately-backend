@@ -30,10 +30,9 @@ export const signup = async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Username already taken' });
     }
 
-    const { data: authData, error: authError } = await supabase.auth.admin.createUser({
+    const { data: authData, error: authError } = await supabase.auth.signUp({
       email,
       password,
-      email_confirm: true,
     });
 
     if (authError || !authData.user) {
