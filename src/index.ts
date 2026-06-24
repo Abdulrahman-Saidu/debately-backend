@@ -8,6 +8,7 @@ import debateRoutes from './routes/debateRoutes';
 import verdictRoutes from './routes/verdictRoutes';
 import commentRoutes from './routes/commentRoutes';
 import voteRoutes from './routes/voteRoutes';
+import livekitRoutes from './routes/livekitRoutes';
 
 dotenv.config();
 
@@ -27,6 +28,7 @@ app.use('/api/debates', debateRoutes);
 app.use('/api/verdicts', verdictRoutes);
 app.use('/api/comments', commentRoutes);
 app.use('/api/votes', voteRoutes);
+app.use('/api/livekit', livekitRoutes);
 
 app.use((req, res) => {
   res.status(404).json({ error: 'Route not found' });
