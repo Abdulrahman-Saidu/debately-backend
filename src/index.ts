@@ -6,8 +6,6 @@ import authRoutes from './routes/authRoutes';
 import userRoutes from './routes/userRoutes';
 import debateRoutes from './routes/debateRoutes';
 import verdictRoutes from './routes/verdictRoutes';
-import commentRoutes from './routes/commentRoutes';
-import voteRoutes from './routes/voteRoutes';
 import livekitRoutes from './routes/livekitRoutes';
 
 dotenv.config();
@@ -26,8 +24,6 @@ app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/debates', debateRoutes);
 app.use('/api/verdicts', verdictRoutes);
-app.use('/api/comments', commentRoutes);
-app.use('/api/votes', voteRoutes);
 app.use('/api/livekit', livekitRoutes);
 
 app.use((req, res) => {
