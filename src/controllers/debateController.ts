@@ -6,10 +6,32 @@ import { v4 as uuidv4 } from 'uuid';
 export const createRoom = async (req: AuthedRequest, res: Response) => {
   try {
     const userId = req.userId;
-    const { topic } = req.body;
+    const { topic, opponent_username } = req.body;
 
     if (!topic) {
       return res.status(400).json({ error: 'Topic is required' });
+    }
+
+    let debaterTwoId: string | null = null;
+    let status: 'open' | 'pending_invite' = 'open';
+
+    if (opponent_username) {
+      const { data: opponent, error: opponentError } = await supabase
+        .from('users')
+        .select('id')
+        .eq('username', opponent_username)
+        .maybeSingle();
+
+      if (opponentError || !opponent) {
+        return res.status(404).json({ error: 'Opponent not found' });
+      }
+
+      if (opponent.id === userId) {
+        return res.status(400).json({ error: 'You cannot invite yourself' });
+      }
+
+      debaterTwoId = opponent.id;
+      status = 'pending_invite';
     }
 
     const roomId = uuidv4();
@@ -21,8 +43,8 @@ export const createRoom = async (req: AuthedRequest, res: Response) => {
         topic,
         creator_id: userId,
         debater_one_id: userId,
-        debater_two_id: null,
-        status: 'open',
+        debater_two_id: debaterTwoId,
+        status,
         started_at: null,
         ended_at: null,
       })
@@ -189,6 +211,133 @@ export const endDebate = async (req: AuthedRequest, res: Response) => {
     return res.status(200).json({ message: 'Debate ended', debate: data });
   } catch (err) {
     console.error('[END DEBATE ERROR]', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+// Doc extension: invites are pending debates where the current user is
+// debater_two. Listed separately from the open list so the dashboard can
+// show "X invited you" rather than mixing them into the public feed.
+export const getMyInvites = async (req: AuthedRequest, res: Response) => {
+  try {
+    const userId = req.userId;
+
+    const { data, error } = await supabase
+      .from('debates')
+      .select(`
+        id,
+        room_id,
+        topic,
+        status,
+        created_at,
+        debater_one_id,
+        users:debater_one_id ( username, avatar_url )
+      `)
+      .eq('debater_two_id', userId)
+      .eq('status', 'pending_invite')
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('[GET INVITES ERROR]', error);
+      return res.status(500).json({ error: error.message });
+    }
+
+    return res.status(200).json({ invites: data });
+  } catch (err) {
+    console.error('[GET INVITES ERROR]', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+export const acceptInvite = async (req: AuthedRequest, res: Response) => {
+  try {
+    const userId = req.userId;
+    const { room_id } = req.params;
+
+    const { data: debate, error: fetchError } = await supabase
+      .from('debates')
+      .select('*')
+      .eq('room_id', room_id)
+      .single();
+
+    if (fetchError || !debate) {
+      return res.status(404).json({ error: 'Invite not found' });
+    }
+
+    if (debate.debater_two_id !== userId) {
+      return res.status(403).json({ error: 'This invite is not addressed to you' });
+    }
+
+    if (debate.status !== 'pending_invite') {
+      return res.status(400).json({ error: 'This invite is no longer available' });
+    }
+
+    const sides = ['FOR', 'AGAINST'];
+    const debaterOneSide = sides[Math.floor(Math.random() * 2)];
+    const debaterTwoSide = debaterOneSide === 'FOR' ? 'AGAINST' : 'FOR';
+
+    const { data, error } = await supabase
+      .from('debates')
+      .update({
+        debater_one_side: debaterOneSide,
+        debater_two_side: debaterTwoSide,
+        status: 'in_progress',
+        started_at: new Date().toISOString(),
+      })
+      .eq('room_id', room_id)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('[ACCEPT INVITE ERROR]', error);
+      return res.status(500).json({ error: error.message });
+    }
+
+    return res.status(200).json({ message: 'Invite accepted', debate: data });
+  } catch (err) {
+    console.error('[ACCEPT INVITE ERROR]', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+export const declineInvite = async (req: AuthedRequest, res: Response) => {
+  try {
+    const userId = req.userId;
+    const { room_id } = req.params;
+
+    const { data: debate, error: fetchError } = await supabase
+      .from('debates')
+      .select('*')
+      .eq('room_id', room_id)
+      .single();
+
+    if (fetchError || !debate) {
+      return res.status(404).json({ error: 'Invite not found' });
+    }
+
+    if (debate.debater_two_id !== userId) {
+      return res.status(403).json({ error: 'This invite is not addressed to you' });
+    }
+
+    if (debate.status !== 'pending_invite') {
+      return res.status(400).json({ error: 'This invite is no longer available' });
+    }
+
+    const { data, error } = await supabase
+      .from('debates')
+      .update({ status: 'declined' })
+      .eq('room_id', room_id)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('[DECLINE INVITE ERROR]', error);
+      return res.status(500).json({ error: error.message });
+    }
+
+    return res.status(200).json({ message: 'Invite declined', debate: data });
+  } catch (err) {
+    console.error('[DECLINE INVITE ERROR]', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 };

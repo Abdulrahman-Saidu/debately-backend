@@ -1,4 +1,4 @@
-export type DebateStatus = 'open' | 'in_progress' | 'completed';
+export type DebateStatus = 'open' | 'pending_invite' | 'in_progress' | 'completed' | 'declined';
 
 export interface User {
   id: string;
