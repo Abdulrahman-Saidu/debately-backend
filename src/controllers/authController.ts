@@ -1,16 +1,6 @@
 import { Request, Response } from 'express';
 import { supabase } from '../config/supabase';
-
-const getRankFromElo = (elo: number): string => {
-  if (elo < 1000) return 'Pawn';
-  if (elo < 1200) return 'Knight';
-  if (elo < 1400) return 'Bishop';
-  if (elo < 1600) return 'Rook';
-  if (elo < 1800) return 'Queen';
-  if (elo < 2000) return 'King';
-  if (elo < 2200) return 'Champion';
-  return 'Grandmaster';
-};
+import { AuthedRequest } from '../middleware/auth';
 
 export const signup = async (req: Request, res: Response) => {
   try {
@@ -24,7 +14,7 @@ export const signup = async (req: Request, res: Response) => {
       .from('users')
       .select('id')
       .eq('username', username)
-      .single();
+      .maybeSingle();
 
     if (existingUser) {
       return res.status(400).json({ error: 'Username already taken' });
@@ -43,18 +33,15 @@ export const signup = async (req: Request, res: Response) => {
       id: authData.user.id,
       email,
       username,
-      wins: 0,
-      losses: 0,
-      total_debates: 0,
-      interests: [],
       rules_accepted: false,
       avatar_url: null,
       bio: null,
     });
 
     if (profileError) {
+      console.error('[PROFILE INSERT ERROR]', profileError);
       await supabase.auth.admin.deleteUser(authData.user.id);
-      return res.status(500).json({ error: 'Failed to create user profile' });
+      return res.status(500).json({ error: profileError.message });
     }
 
     const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
@@ -63,6 +50,7 @@ export const signup = async (req: Request, res: Response) => {
     });
 
     if (signInError || !signInData.session) {
+      console.error('[POST-SIGNUP SIGNIN ERROR]', signInError);
       return res.status(500).json({ error: 'Signup succeeded but login failed' });
     }
 
@@ -74,7 +62,6 @@ export const signup = async (req: Request, res: Response) => {
         email,
         username,
         rules_accepted: false,
-        interests: [],
       },
     });
   } catch (err) {
@@ -107,6 +94,7 @@ export const signin = async (req: Request, res: Response) => {
       .single();
 
     if (profileError || !profile) {
+      console.error('[SIGNIN PROFILE FETCH ERROR]', profileError);
       return res.status(404).json({ error: 'User profile not found' });
     }
 
@@ -121,25 +109,21 @@ export const signin = async (req: Request, res: Response) => {
   }
 };
 
-export const completeOnboarding = async (req: Request, res: Response) => {
+// Doc scope: onboarding is just the welcome / mic-camera-check / rules-explainer
+// flow (3.2.3, screen 3 in the Lovable spec) -- no "interests" concept exists
+// anywhere in the document, so this just flips rules_accepted.
+export const completeOnboarding = async (req: AuthedRequest, res: Response) => {
   try {
-    const userId = (req as any).userId;
-    const { interests } = req.body;
-
-    if (!interests || !Array.isArray(interests) || interests.length === 0) {
-      return res.status(400).json({ error: 'At least one interest is required' });
-    }
+    const userId = req.userId;
 
     const { error } = await supabase
       .from('users')
-      .update({
-        interests,
-        rules_accepted: true,
-      })
+      .update({ rules_accepted: true })
       .eq('id', userId);
 
     if (error) {
-      return res.status(500).json({ error: 'Failed to complete onboarding' });
+      console.error('[ONBOARDING ERROR]', error);
+      return res.status(500).json({ error: error.message });
     }
 
     return res.status(200).json({ message: 'Onboarding completed successfully' });

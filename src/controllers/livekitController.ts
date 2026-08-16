@@ -7,6 +7,7 @@ export const getRoomToken = async (req: AuthedRequest, res: Response) => {
     try {
         const userId = req.userId;
         const room_id = req.params.room_id as string;
+
         const { data: debate, error } = await supabase
             .from('debates')
             .select('*')
@@ -24,13 +25,20 @@ export const getRoomToken = async (req: AuthedRequest, res: Response) => {
         const isDebater =
             debate.debater_one_id === userId || debate.debater_two_id === userId;
 
-        const { data: user } = await supabase
+        // Doc scope: debate sessions are private, two-person only -- no
+        // spectator/audience access exists anywhere in the design.
+        if (!isDebater) {
+            return res.status(403).json({ error: 'Only debate participants can join this room' });
+        }
+
+        const { data: user, error: userError } = await supabase
             .from('users')
             .select('username')
             .eq('id', userId)
             .single();
 
-        if (!user) {
+        if (userError || !user) {
+            console.error('[LIVEKIT TOKEN - USER FETCH ERROR]', userError);
             return res.status(404).json({ error: 'User not found' });
         }
 
@@ -45,7 +53,7 @@ export const getRoomToken = async (req: AuthedRequest, res: Response) => {
         token.addGrant({
             roomJoin: true,
             room: room_id,
-            canPublish: isDebater,
+            canPublish: true,
             canSubscribe: true,
             canPublishData: true,
         });
@@ -56,7 +64,7 @@ export const getRoomToken = async (req: AuthedRequest, res: Response) => {
             token: jwt,
             url: process.env.LIVEKIT_URL,
             room_id,
-            role: isDebater ? 'debater' : 'audience',
+            role: 'debater',
         });
     } catch (err) {
         console.error('[LIVEKIT TOKEN ERROR]', err);

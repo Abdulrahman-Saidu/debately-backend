@@ -19,10 +19,10 @@ export const createRoom = async (req: AuthedRequest, res: Response) => {
       .insert({
         room_id: roomId,
         topic,
+        creator_id: userId,
         debater_one_id: userId,
         debater_two_id: null,
-        status: 'waiting',
-        winner_id: null,
+        status: 'open',
         started_at: null,
         ended_at: null,
       })
@@ -30,7 +30,8 @@ export const createRoom = async (req: AuthedRequest, res: Response) => {
       .single();
 
     if (error) {
-      return res.status(500).json({ error: 'Failed to create room' });
+      console.error('[CREATE ROOM ERROR]', error);
+      return res.status(500).json({ error: error.message });
     }
 
     return res.status(201).json({ message: 'Room created', debate: data });
@@ -55,7 +56,7 @@ export const joinRoom = async (req: AuthedRequest, res: Response) => {
       return res.status(404).json({ error: 'Room not found' });
     }
 
-    if (debate.status !== 'waiting') {
+    if (debate.status !== 'open') {
       return res.status(400).json({ error: 'Room is no longer available' });
     }
 
@@ -73,7 +74,7 @@ export const joinRoom = async (req: AuthedRequest, res: Response) => {
         debater_two_id: userId,
         debater_one_side: debaterOneSide,
         debater_two_side: debaterTwoSide,
-        status: 'live',
+        status: 'in_progress',
         started_at: new Date().toISOString(),
       })
       .eq('room_id', room_id)
@@ -81,7 +82,8 @@ export const joinRoom = async (req: AuthedRequest, res: Response) => {
       .single();
 
     if (error) {
-      return res.status(500).json({ error: 'Failed to join room' });
+      console.error('[JOIN ROOM ERROR]', error);
+      return res.status(500).json({ error: error.message });
     }
 
     return res.status(200).json({ message: 'Joined room successfully', debate: data });
@@ -91,7 +93,8 @@ export const joinRoom = async (req: AuthedRequest, res: Response) => {
   }
 };
 
-export const getLiveDebates = async (req: Request, res: Response) => {
+// Doc 3.2.3 / 3.3.4: dashboard lists open, publicly listed debate topics.
+export const getOpenDebates = async (req: Request, res: Response) => {
   try {
     const { data, error } = await supabase
       .from('debates')
@@ -100,21 +103,22 @@ export const getLiveDebates = async (req: Request, res: Response) => {
         room_id,
         topic,
         status,
-        started_at,
-        debater_one_id,
-        debater_two_id
+        created_at,
+        creator_id,
+        debater_one_id
       `)
-      .eq('status', 'live')
-      .order('started_at', { ascending: false })
+      .eq('status', 'open')
+      .order('created_at', { ascending: false })
       .limit(20);
 
     if (error) {
-      return res.status(500).json({ error: 'Failed to fetch live debates' });
+      console.error('[GET OPEN DEBATES ERROR]', error);
+      return res.status(500).json({ error: error.message });
     }
 
     return res.status(200).json({ debates: data });
   } catch (err) {
-    console.error('[GET LIVE DEBATES ERROR]', err);
+    console.error('[GET OPEN DEBATES ERROR]', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 };
@@ -140,99 +144,14 @@ export const getDebateByRoomId = async (req: AuthedRequest, res: Response) => {
   }
 };
 
-export const quickMatch = async (req: AuthedRequest, res: Response) => {
-  try {
-    const userId = req.userId;
-
-    const { data: userProfile } = await supabase
-      .from('users')
-      .select('elo, interests')
-      .eq('id', userId)
-      .single();
-
-    if (!userProfile) {
-      return res.status(404).json({ error: 'User profile not found' });
-    }
-
-    const { data: availableRooms, error } = await supabase
-      .from('debates')
-      .select('*')
-      .eq('status', 'waiting')
-      .neq('debater_one_id', userId)
-      .order('created_at', { ascending: true })
-      .limit(1);
-
-    if (error) {
-      return res.status(500).json({ error: 'Failed to find a match' });
-    }
-
-    if (!availableRooms || availableRooms.length === 0) {
-      const roomId = uuidv4();
-
-      const { data: newRoom, error: createError } = await supabase
-        .from('debates')
-        .insert({
-          room_id: roomId,
-          topic: 'Open Debate',
-          debater_one_id: userId,
-          debater_two_id: null,
-          status: 'waiting',
-          winner_id: null,
-          started_at: null,
-          ended_at: null,
-        })
-        .select()
-        .single();
-
-      if (createError) {
-        return res.status(500).json({ error: 'Failed to create match room' });
-      }
-
-      return res.status(200).json({
-        message: 'Waiting for opponent',
-        status: 'waiting',
-        debate: newRoom,
-      });
-    }
-
-    const room = availableRooms[0];
-    const sides = ['FOR', 'AGAINST'];
-    const debaterOneSide = sides[Math.floor(Math.random() * 2)];
-    const debaterTwoSide = debaterOneSide === 'FOR' ? 'AGAINST' : 'FOR';
-
-    const { data: joinedRoom, error: joinError } = await supabase
-      .from('debates')
-      .update({
-        debater_two_id: userId,
-        debater_one_side: debaterOneSide,
-        debater_two_side: debaterTwoSide,
-        status: 'live',
-        started_at: new Date().toISOString(),
-      })
-      .eq('room_id', room.room_id)
-      .select()
-      .single();
-
-    if (joinError) {
-      return res.status(500).json({ error: 'Failed to join match' });
-    }
-
-    return res.status(200).json({
-      message: 'Match found',
-      status: 'matched',
-      debate: joinedRoom,
-    });
-  } catch (err) {
-    console.error('[QUICK MATCH ERROR]', err);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-};
-
+// Doc scope: a debate ends when the session concludes (time expires / both
+// turns complete) and transitions straight to AI verdict generation -- there
+// is no manually-declared winner_id here. The winner is decided by the AI
+// verdict module and stored on the verdicts table, not this one.
 export const endDebate = async (req: AuthedRequest, res: Response) => {
   try {
     const userId = req.userId;
     const { room_id } = req.params;
-    const { winner_id } = req.body;
 
     const { data: debate, error: fetchError } = await supabase
       .from('debates')
@@ -248,15 +167,14 @@ export const endDebate = async (req: AuthedRequest, res: Response) => {
       return res.status(403).json({ error: 'Not authorized to end this debate' });
     }
 
-    if (debate.status !== 'live') {
-      return res.status(400).json({ error: 'Debate is not live' });
+    if (debate.status !== 'in_progress') {
+      return res.status(400).json({ error: 'Debate is not in progress' });
     }
 
     const { data, error } = await supabase
       .from('debates')
       .update({
         status: 'completed',
-        winner_id: winner_id || null,
         ended_at: new Date().toISOString(),
       })
       .eq('room_id', room_id)
@@ -264,7 +182,8 @@ export const endDebate = async (req: AuthedRequest, res: Response) => {
       .single();
 
     if (error) {
-      return res.status(500).json({ error: 'Failed to end debate' });
+      console.error('[END DEBATE ERROR]', error);
+      return res.status(500).json({ error: error.message });
     }
 
     return res.status(200).json({ message: 'Debate ended', debate: data });

@@ -23,13 +23,15 @@ export const getMyProfile = async (req: AuthedRequest, res: Response) => {
   }
 };
 
+// Doc scope: no elo/rank/interests concept exists on the users table --
+// profile is identity + bio only.
 export const getUserProfile = async (req: Request, res: Response) => {
   try {
     const { username } = req.params;
 
     const { data, error } = await supabase
       .from('users')
-      .select('id, username, avatar_url, bio, elo, rank, wins, losses, total_debates, interests, created_at')
+      .select('id, username, avatar_url, bio, created_at')
       .eq('username', username)
       .single();
 
@@ -79,7 +81,8 @@ export const updateProfile = async (req: AuthedRequest, res: Response) => {
       .single();
 
     if (error) {
-      return res.status(500).json({ error: 'Failed to update profile' });
+      console.error('[UPDATE PROFILE ERROR]', error);
+      return res.status(500).json({ error: error.message });
     }
 
     return res.status(200).json({ message: 'Profile updated', user: data });
@@ -89,6 +92,8 @@ export const updateProfile = async (req: AuthedRequest, res: Response) => {
   }
 };
 
+// Doc scope: winner_id lives on verdicts, not debates -- join it in rather
+// than selecting a column that doesn't exist. No elo anywhere.
 export const getRecentDebates = async (req: AuthedRequest, res: Response) => {
   try {
     const userId = req.userId;
@@ -100,16 +105,14 @@ export const getRecentDebates = async (req: AuthedRequest, res: Response) => {
         id,
         topic,
         status,
-        winner_id,
         created_at,
         ended_at,
         debater_one_id,
         debater_two_id,
         verdicts (
+          winner_id,
           debater_one_score,
-          debater_two_score,
-          debater_one_elo_change,
-          debater_two_elo_change
+          debater_two_score
         )
       `)
       .or(`debater_one_id.eq.${userId},debater_two_id.eq.${userId}`)
@@ -118,7 +121,8 @@ export const getRecentDebates = async (req: AuthedRequest, res: Response) => {
       .limit(limit);
 
     if (error) {
-      return res.status(500).json({ error: 'Failed to fetch recent debates' });
+      console.error('[RECENT DEBATES ERROR]', error);
+      return res.status(500).json({ error: error.message });
     }
 
     return res.status(200).json({ debates: data });
