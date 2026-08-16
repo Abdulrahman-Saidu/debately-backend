@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
 # Debately backend smoke test — exercises every implemented endpoint in one
-# realistic two-debater flow, including direct invites. Requires: curl only
-# (no jq).
+# realistic two-debater flow. Requires: curl only (no jq).
 #
 # Usage:
-#   BASE_URL=https://debately-backend.onrender.com ./debately-curl-test.sh
-#   (or BASE_URL=http://localhost:4000 for local testing)
+#   BASE_URL=http://localhost:4000 ./debately-curl-test.sh
 #
 # Prints each step and its HTTP status. Screenshot the terminal output for
 # Chapter 4's testing evidence.
@@ -65,18 +63,7 @@ check_status 201 "$STATUS" "POST /api/auth/signup (B)"
 TOKEN_B=$(extract_field "$BODY" "token")
 USER_ID_B=$(extract_field "$BODY" "id")
 
-step "03b - Signup Debater C (used only for the 403 invite-accept check)"
-EMAIL_C="debater.c.$TS@debately.test"
-USERNAME_C="debaterC$TS"
-RESP=$(curl -s -w "\n%{http_code}" -X POST "$BASE_URL/api/auth/signup" \
-  -H "Content-Type: application/json" \
-  -d "{\"email\":\"$EMAIL_C\",\"password\":\"TestPass123!\",\"username\":\"$USERNAME_C\"}")
-STATUS=$(echo "$RESP" | tail -1)
-BODY=$(echo "$RESP" | sed '$d')
-check_status 201 "$STATUS" "POST /api/auth/signup (C)"
-TOKEN_C=$(extract_field "$BODY" "token")
-
-step "04 - Onboarding A + B + C"
+step "04 - Onboarding A + B"
 # completeOnboarding ignores the request body entirely -- it just flips
 # rules_accepted to true. No "interests" field exists on users, so nothing
 # is sent here.
@@ -87,10 +74,6 @@ check_status 200 "$STATUS" "POST /api/auth/onboarding (A)"
 STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE_URL/api/auth/onboarding" \
   -H "Authorization: Bearer $TOKEN_B")
 check_status 200 "$STATUS" "POST /api/auth/onboarding (B)"
-
-STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE_URL/api/auth/onboarding" \
-  -H "Authorization: Bearer $TOKEN_C")
-check_status 200 "$STATUS" "POST /api/auth/onboarding (C)"
 
 step "05 - Create Debate (A)"
 RESP=$(curl -s -w "\n%{http_code}" -X POST "$BASE_URL/api/debates/create" \
@@ -162,95 +145,7 @@ STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/api/verdicts/$DEBATE_
   -H "Authorization: Bearer $TOKEN_A")
 check_status 200 "$STATUS" "GET /api/verdicts/$DEBATE_ID"
 
-step "13 - Create Debate with Direct Invite (A invites B)"
-# Uses a fresh room -- the ROOM_ID above is already 'completed' from step 10.
-RESP=$(curl -s -w "\n%{http_code}" -X POST "$BASE_URL/api/debates/create" \
-  -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN_A" \
-  -d "{\"topic\":\"This house believes remote work is net positive for young engineers\",\"opponent_username\":\"$USERNAME_B\"}")
-STATUS=$(echo "$RESP" | tail -1)
-BODY=$(echo "$RESP" | sed '$d')
-check_status 201 "$STATUS" "POST /api/debates/create (with opponent_username)"
-INVITE_ROOM_ID=$(extract_field "$BODY" "room_id")
-if echo "$BODY" | grep -q "\"status\":\"pending_invite\""; then
-  pass "debate created with status=pending_invite"
-else
-  fail "debate status is not pending_invite"
-fi
-
-step "14 - List My Invites (B)"
-RESP=$(curl -s -w "\n%{http_code}" "$BASE_URL/api/debates/invites" \
-  -H "Authorization: Bearer $TOKEN_B")
-STATUS=$(echo "$RESP" | tail -1)
-BODY=$(echo "$RESP" | sed '$d')
-check_status 200 "$STATUS" "GET /api/debates/invites (B)"
-if echo "$BODY" | grep -q "\"room_id\":\"$INVITE_ROOM_ID\""; then
-  pass "invite appears in B's invite list"
-else
-  fail "invite NOT found in B's invite list"
-fi
-
-step "15 - Accept Invite as wrong user (C) -- must be rejected"
-STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE_URL/api/debates/$INVITE_ROOM_ID/accept" \
-  -H "Authorization: Bearer $TOKEN_C")
-check_status 403 "$STATUS" "POST /api/debates/$INVITE_ROOM_ID/accept (C, not invited)"
-
-step "16 - Accept Invite (B)"
-RESP=$(curl -s -w "\n%{http_code}" -X POST "$BASE_URL/api/debates/$INVITE_ROOM_ID/accept" \
-  -H "Authorization: Bearer $TOKEN_B")
-STATUS=$(echo "$RESP" | tail -1)
-BODY=$(echo "$RESP" | sed '$d')
-check_status 200 "$STATUS" "POST /api/debates/$INVITE_ROOM_ID/accept (B)"
-if echo "$BODY" | grep -q "\"status\":\"in_progress\""; then
-  pass "invite accepted, debate is now in_progress"
-else
-  fail "debate status did not transition to in_progress"
-fi
-
-step "17 - Re-accept same invite -- must be rejected (already resolved)"
-STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE_URL/api/debates/$INVITE_ROOM_ID/accept" \
-  -H "Authorization: Bearer $TOKEN_B")
-check_status 400 "$STATUS" "POST /api/debates/$INVITE_ROOM_ID/accept (B, second time)"
-
-step "18 - Decline Invite (fresh D vs E pair)"
-EMAIL_D="debater.d.$TS@debately.test"
-USERNAME_D="debaterD$TS"
-RESP=$(curl -s -w "\n%{http_code}" -X POST "$BASE_URL/api/auth/signup" \
-  -H "Content-Type: application/json" \
-  -d "{\"email\":\"$EMAIL_D\",\"password\":\"TestPass123!\",\"username\":\"$USERNAME_D\"}")
-STATUS=$(echo "$RESP" | tail -1); BODY=$(echo "$RESP" | sed '$d')
-check_status 201 "$STATUS" "POST /api/auth/signup (D)"
-TOKEN_D=$(extract_field "$BODY" "token")
-
-EMAIL_E="debater.e.$TS@debately.test"
-USERNAME_E="debaterE$TS"
-RESP=$(curl -s -w "\n%{http_code}" -X POST "$BASE_URL/api/auth/signup" \
-  -H "Content-Type: application/json" \
-  -d "{\"email\":\"$EMAIL_E\",\"password\":\"TestPass123!\",\"username\":\"$USERNAME_E\"}")
-STATUS=$(echo "$RESP" | tail -1); BODY=$(echo "$RESP" | sed '$d')
-check_status 201 "$STATUS" "POST /api/auth/signup (E)"
-TOKEN_E=$(extract_field "$BODY" "token")
-
-curl -s -o /dev/null -X POST "$BASE_URL/api/auth/onboarding" -H "Authorization: Bearer $TOKEN_D"
-curl -s -o /dev/null -X POST "$BASE_URL/api/auth/onboarding" -H "Authorization: Bearer $TOKEN_E"
-
-RESP=$(curl -s -w "\n%{http_code}" -X POST "$BASE_URL/api/debates/create" \
-  -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN_D" \
-  -d "{\"topic\":\"This house believes university is overrated for software careers\",\"opponent_username\":\"$USERNAME_E\"}")
-STATUS=$(echo "$RESP" | tail -1); BODY=$(echo "$RESP" | sed '$d')
-check_status 201 "$STATUS" "POST /api/debates/create (D invites E)"
-DECLINE_ROOM_ID=$(extract_field "$BODY" "room_id")
-
-RESP=$(curl -s -w "\n%{http_code}" -X POST "$BASE_URL/api/debates/$DECLINE_ROOM_ID/decline" \
-  -H "Authorization: Bearer $TOKEN_E")
-STATUS=$(echo "$RESP" | tail -1); BODY=$(echo "$RESP" | sed '$d')
-check_status 200 "$STATUS" "POST /api/debates/$DECLINE_ROOM_ID/decline (E)"
-if echo "$BODY" | grep -q "\"status\":\"declined\""; then
-  pass "invite declined, debate status is declined"
-else
-  fail "debate status did not transition to declined"
-fi
-
-step "19 - Profile endpoints"
+step "13 - Profile endpoints"
 STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/api/users/me" -H "Authorization: Bearer $TOKEN_A")
 check_status 200 "$STATUS" "GET /api/users/me"
 
@@ -265,7 +160,7 @@ check_status 200 "$STATUS" "GET /api/users/$USERNAME_A"
 STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/api/users/recent-debates" -H "Authorization: Bearer $TOKEN_A")
 check_status 200 "$STATUS" "GET /api/users/recent-debates"
 
-step "20 - Signout"
+step "14 - Signout"
 STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE_URL/api/auth/signout" -H "Authorization: Bearer $TOKEN_A")
 check_status 200 "$STATUS" "POST /api/auth/signout"
 

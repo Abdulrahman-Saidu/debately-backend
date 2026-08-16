@@ -151,7 +151,11 @@ export const getDebateByRoomId = async (req: AuthedRequest, res: Response) => {
 
     const { data, error } = await supabase
       .from('debates')
-      .select('*')
+      .select(`
+        *,
+        debater_one:debater_one_id ( username, avatar_url ),
+        debater_two:debater_two_id ( username, avatar_url )
+      `)
       .eq('room_id', room_id)
       .single();
 
