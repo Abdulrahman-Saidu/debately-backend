@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Debately backend smoke test — exercises every implemented endpoint in one
-# realistic two-debater flow. Requires: curl only (no jq).
+# realistic two-debater flow, including direct invites. Requires: curl only
+# (no jq).
 #
 # Usage:
-#   BASE_URL=http://localhost:4000 ./debately-curl-test.sh
+#   BASE_URL=https://debately-backend.onrender.com ./debately-curl-test.sh
+#   (or BASE_URL=http://localhost:4000 for local testing)
 #
 # Prints each step and its HTTP status. Screenshot the terminal output for
 # Chapter 4's testing evidence.
@@ -209,7 +211,46 @@ STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE_URL/api/debates/$
   -H "Authorization: Bearer $TOKEN_B")
 check_status 400 "$STATUS" "POST /api/debates/$INVITE_ROOM_ID/accept (B, second time)"
 
-step "18 - Profile endpoints"
+step "18 - Decline Invite (fresh D vs E pair)"
+EMAIL_D="debater.d.$TS@debately.test"
+USERNAME_D="debaterD$TS"
+RESP=$(curl -s -w "\n%{http_code}" -X POST "$BASE_URL/api/auth/signup" \
+  -H "Content-Type: application/json" \
+  -d "{\"email\":\"$EMAIL_D\",\"password\":\"TestPass123!\",\"username\":\"$USERNAME_D\"}")
+STATUS=$(echo "$RESP" | tail -1); BODY=$(echo "$RESP" | sed '$d')
+check_status 201 "$STATUS" "POST /api/auth/signup (D)"
+TOKEN_D=$(extract_field "$BODY" "token")
+
+EMAIL_E="debater.e.$TS@debately.test"
+USERNAME_E="debaterE$TS"
+RESP=$(curl -s -w "\n%{http_code}" -X POST "$BASE_URL/api/auth/signup" \
+  -H "Content-Type: application/json" \
+  -d "{\"email\":\"$EMAIL_E\",\"password\":\"TestPass123!\",\"username\":\"$USERNAME_E\"}")
+STATUS=$(echo "$RESP" | tail -1); BODY=$(echo "$RESP" | sed '$d')
+check_status 201 "$STATUS" "POST /api/auth/signup (E)"
+TOKEN_E=$(extract_field "$BODY" "token")
+
+curl -s -o /dev/null -X POST "$BASE_URL/api/auth/onboarding" -H "Authorization: Bearer $TOKEN_D"
+curl -s -o /dev/null -X POST "$BASE_URL/api/auth/onboarding" -H "Authorization: Bearer $TOKEN_E"
+
+RESP=$(curl -s -w "\n%{http_code}" -X POST "$BASE_URL/api/debates/create" \
+  -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN_D" \
+  -d "{\"topic\":\"This house believes university is overrated for software careers\",\"opponent_username\":\"$USERNAME_E\"}")
+STATUS=$(echo "$RESP" | tail -1); BODY=$(echo "$RESP" | sed '$d')
+check_status 201 "$STATUS" "POST /api/debates/create (D invites E)"
+DECLINE_ROOM_ID=$(extract_field "$BODY" "room_id")
+
+RESP=$(curl -s -w "\n%{http_code}" -X POST "$BASE_URL/api/debates/$DECLINE_ROOM_ID/decline" \
+  -H "Authorization: Bearer $TOKEN_E")
+STATUS=$(echo "$RESP" | tail -1); BODY=$(echo "$RESP" | sed '$d')
+check_status 200 "$STATUS" "POST /api/debates/$DECLINE_ROOM_ID/decline (E)"
+if echo "$BODY" | grep -q "\"status\":\"declined\""; then
+  pass "invite declined, debate status is declined"
+else
+  fail "debate status did not transition to declined"
+fi
+
+step "19 - Profile endpoints"
 STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/api/users/me" -H "Authorization: Bearer $TOKEN_A")
 check_status 200 "$STATUS" "GET /api/users/me"
 
@@ -224,7 +265,7 @@ check_status 200 "$STATUS" "GET /api/users/$USERNAME_A"
 STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/api/users/recent-debates" -H "Authorization: Bearer $TOKEN_A")
 check_status 200 "$STATUS" "GET /api/users/recent-debates"
 
-step "19 - Signout"
+step "20 - Signout"
 STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE_URL/api/auth/signout" -H "Authorization: Bearer $TOKEN_A")
 check_status 200 "$STATUS" "POST /api/auth/signout"
 
