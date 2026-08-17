@@ -94,6 +94,11 @@ export const updateProfile = async (req: AuthedRequest, res: Response) => {
 
 // Doc scope: winner_id lives on verdicts, not debates -- join it in rather
 // than selecting a column that doesn't exist. No elo anywhere.
+//
+// room_id + debater_one/debater_two username joins were added so the
+// frontend (dashboard "Recent debates" + /profile history) can link to
+// /verdict?room_id=... and show a real opponent name instead of a raw id
+// or placeholder.
 export const getRecentDebates = async (req: AuthedRequest, res: Response) => {
   try {
     const userId = req.userId;
@@ -103,12 +108,15 @@ export const getRecentDebates = async (req: AuthedRequest, res: Response) => {
       .from('debates')
       .select(`
         id,
+        room_id,
         topic,
         status,
         created_at,
         ended_at,
         debater_one_id,
         debater_two_id,
+        debater_one:debater_one_id ( username, avatar_url ),
+        debater_two:debater_two_id ( username, avatar_url ),
         verdicts (
           winner_id,
           debater_one_score,
