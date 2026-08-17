@@ -8,6 +8,7 @@ import {
   getMyInvites,
   acceptInvite,
   declineInvite,
+  advanceTurn,
 } from '../controllers/debateController';
 import { requireAuth } from '../middleware/auth';
 
@@ -20,6 +21,7 @@ router.post('/create', requireAuth, createRoom);
 router.post('/:room_id/join', requireAuth, joinRoom);
 router.post('/:room_id/accept', requireAuth, acceptInvite);
 router.post('/:room_id/decline', requireAuth, declineInvite);
+router.post('/:room_id/turn/advance', requireAuth, advanceTurn);
 router.post('/:room_id/end', requireAuth, endDebate);
 
 export default router;

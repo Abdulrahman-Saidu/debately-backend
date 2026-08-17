@@ -3,10 +3,13 @@ import { supabase } from '../config/supabase';
 import { AuthedRequest } from '../middleware/auth';
 import { v4 as uuidv4 } from 'uuid';
 
+const DEFAULT_TURN_SECONDS = 60;
+const DEFAULT_TOTAL_SECONDS = 900;
+
 export const createRoom = async (req: AuthedRequest, res: Response) => {
   try {
     const userId = req.userId;
-    const { topic, opponent_username } = req.body;
+    const { topic, opponent_username, turn_duration_seconds, total_duration_seconds } = req.body;
 
     if (!topic) {
       return res.status(400).json({ error: 'Topic is required' });
@@ -47,6 +50,10 @@ export const createRoom = async (req: AuthedRequest, res: Response) => {
         status,
         started_at: null,
         ended_at: null,
+        turn_duration_seconds:
+          typeof turn_duration_seconds === 'number' ? turn_duration_seconds : DEFAULT_TURN_SECONDS,
+        total_duration_seconds:
+          typeof total_duration_seconds === 'number' ? total_duration_seconds : DEFAULT_TOTAL_SECONDS,
       })
       .select()
       .single();
@@ -98,6 +105,9 @@ export const joinRoom = async (req: AuthedRequest, res: Response) => {
         debater_two_side: debaterTwoSide,
         status: 'in_progress',
         started_at: new Date().toISOString(),
+        current_speaker_id: debate.debater_one_id,
+        turn_number: 1,
+        turn_started_at: new Date().toISOString(),
       })
       .eq('room_id', room_id)
       .select()
@@ -202,6 +212,7 @@ export const endDebate = async (req: AuthedRequest, res: Response) => {
       .update({
         status: 'completed',
         ended_at: new Date().toISOString(),
+        current_speaker_id: null,
       })
       .eq('room_id', room_id)
       .select()
@@ -287,6 +298,9 @@ export const acceptInvite = async (req: AuthedRequest, res: Response) => {
         debater_two_side: debaterTwoSide,
         status: 'in_progress',
         started_at: new Date().toISOString(),
+        current_speaker_id: debate.debater_one_id,
+        turn_number: 1,
+        turn_started_at: new Date().toISOString(),
       })
       .eq('room_id', room_id)
       .select()
@@ -342,6 +356,99 @@ export const declineInvite = async (req: AuthedRequest, res: Response) => {
     return res.status(200).json({ message: 'Invite declined', debate: data });
   } catch (err) {
     console.error('[DECLINE INVITE ERROR]', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+// Turn control: only the CURRENT speaker's client may end their own turn.
+// This is what makes it server-enforced rather than UI-toggled -- a client
+// cannot flip whose turn it is by calling this unless the backend already
+// considers them the active speaker AND their time has elapsed.
+export const advanceTurn = async (req: AuthedRequest, res: Response) => {
+  try {
+    const userId = req.userId;
+    const { room_id } = req.params;
+
+    const { data: debate, error: fetchError } = await supabase
+      .from('debates')
+      .select('*')
+      .eq('room_id', room_id)
+      .single();
+
+    if (fetchError || !debate) {
+      return res.status(404).json({ error: 'Debate not found' });
+    }
+
+    if (debate.status !== 'in_progress') {
+      return res.status(400).json({ error: 'Debate is not in progress' });
+    }
+
+    if (debate.current_speaker_id !== userId) {
+      return res.status(403).json({ error: 'Only the active speaker can end their turn' });
+    }
+
+    if (!debate.turn_started_at || !debate.turn_duration_seconds) {
+      return res.status(400).json({ error: 'Turn has not been started' });
+    }
+
+    const turnStartedMs = new Date(debate.turn_started_at).getTime();
+    const now = Date.now();
+    const elapsedMs = now - turnStartedMs;
+    const graceMs = 1000; // absorb client timer jitter/latency
+
+    if (elapsedMs < debate.turn_duration_seconds * 1000 - graceMs) {
+      return res.status(400).json({ error: 'Turn time has not elapsed yet' });
+    }
+
+    if (debate.total_duration_seconds && debate.started_at) {
+      const debateStartedMs = new Date(debate.started_at).getTime();
+      const totalElapsedMs = now - debateStartedMs;
+
+      if (totalElapsedMs >= debate.total_duration_seconds * 1000) {
+        const { data, error } = await supabase
+          .from('debates')
+          .update({
+            status: 'completed',
+            ended_at: new Date().toISOString(),
+            current_speaker_id: null,
+          })
+          .eq('room_id', room_id)
+          .select()
+          .single();
+
+        if (error) {
+          console.error('[ADVANCE TURN - AUTO END ERROR]', error);
+          return res.status(500).json({ error: error.message });
+        }
+
+        return res.status(200).json({ message: 'Debate time complete', debate: data });
+      }
+    }
+
+    const nextSpeakerId =
+      debate.current_speaker_id === debate.debater_one_id
+        ? debate.debater_two_id
+        : debate.debater_one_id;
+
+    const { data, error } = await supabase
+      .from('debates')
+      .update({
+        current_speaker_id: nextSpeakerId,
+        turn_number: (debate.turn_number ?? 0) + 1,
+        turn_started_at: new Date().toISOString(),
+      })
+      .eq('room_id', room_id)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('[ADVANCE TURN ERROR]', error);
+      return res.status(500).json({ error: error.message });
+    }
+
+    return res.status(200).json({ message: 'Turn advanced', debate: data });
+  } catch (err) {
+    console.error('[ADVANCE TURN ERROR]', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 };
