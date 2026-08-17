@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { supabase } from '../config/supabase';
 import { AuthedRequest } from '../middleware/auth';
 import { v4 as uuidv4 } from 'uuid';
+import { generateVerdictForDebate } from './verdictController';
 
 const DEFAULT_TURN_SECONDS = 60;
 const DEFAULT_TOTAL_SECONDS = 900;
@@ -250,6 +251,13 @@ export const endDebate = async (req: AuthedRequest, res: Response) => {
       return res.status(500).json({ error: error.message });
     }
 
+    // Fire-and-forget -- don't make the ending debater wait on OpenAI.
+    // Errors are logged, not surfaced here; the verdict endpoint can be
+    // retried manually if this fails.
+    void generateVerdictForDebate(data.id).catch((err) =>
+      console.error('[AUTO VERDICT ERROR]', err),
+    );
+
     return res.status(200).json({ message: 'Debate ended', debate: data });
   } catch (err) {
     console.error('[END DEBATE ERROR]', err);
@@ -437,6 +445,10 @@ export const advanceTurn = async (req: AuthedRequest, res: Response) => {
           console.error('[ADVANCE TURN - AUTO END ERROR]', error);
           return res.status(500).json({ error: error.message });
         }
+
+        void generateVerdictForDebate(data.id).catch((err) =>
+          console.error('[AUTO VERDICT ERROR]', err),
+        );
 
         return res.status(200).json({ message: 'Debate time complete', debate: data });
       }
