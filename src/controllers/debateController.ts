@@ -6,13 +6,46 @@ import { v4 as uuidv4 } from 'uuid';
 const DEFAULT_TURN_SECONDS = 60;
 const DEFAULT_TOTAL_SECONDS = 900;
 
+const MIN_TURN_SECONDS = 20;
+const MAX_TURN_SECONDS = 300;
+const MIN_TOTAL_SECONDS = 180;
+const MAX_TOTAL_SECONDS = 3600;
+
 export const createRoom = async (req: AuthedRequest, res: Response) => {
   try {
     const userId = req.userId;
-    const { topic, opponent_username, turn_duration_seconds, total_duration_seconds } = req.body;
+    const {
+      topic,
+      opponent_username,
+      creator_side,
+      turn_duration_seconds,
+      total_duration_seconds,
+    } = req.body;
 
     if (!topic) {
       return res.status(400).json({ error: 'Topic is required' });
+    }
+
+    const creatorSide: 'FOR' | 'AGAINST' = creator_side === 'AGAINST' ? 'AGAINST' : 'FOR';
+
+    let turnSeconds = DEFAULT_TURN_SECONDS;
+    if (typeof turn_duration_seconds === 'number') {
+      if (turn_duration_seconds < MIN_TURN_SECONDS || turn_duration_seconds > MAX_TURN_SECONDS) {
+        return res.status(400).json({
+          error: `Turn duration must be between ${MIN_TURN_SECONDS} and ${MAX_TURN_SECONDS} seconds`,
+        });
+      }
+      turnSeconds = turn_duration_seconds;
+    }
+
+    let totalSeconds = DEFAULT_TOTAL_SECONDS;
+    if (typeof total_duration_seconds === 'number') {
+      if (total_duration_seconds < MIN_TOTAL_SECONDS || total_duration_seconds > MAX_TOTAL_SECONDS) {
+        return res.status(400).json({
+          error: `Total length must be between ${MIN_TOTAL_SECONDS} and ${MAX_TOTAL_SECONDS} seconds`,
+        });
+      }
+      totalSeconds = total_duration_seconds;
     }
 
     let debaterTwoId: string | null = null;
@@ -50,10 +83,10 @@ export const createRoom = async (req: AuthedRequest, res: Response) => {
         status,
         started_at: null,
         ended_at: null,
-        turn_duration_seconds:
-          typeof turn_duration_seconds === 'number' ? turn_duration_seconds : DEFAULT_TURN_SECONDS,
-        total_duration_seconds:
-          typeof total_duration_seconds === 'number' ? total_duration_seconds : DEFAULT_TOTAL_SECONDS,
+        debater_one_side: creatorSide,
+        debater_two_side: null,
+        turn_duration_seconds: turnSeconds,
+        total_duration_seconds: totalSeconds,
       })
       .select()
       .single();
@@ -93,15 +126,14 @@ export const joinRoom = async (req: AuthedRequest, res: Response) => {
       return res.status(400).json({ error: 'You cannot join your own room' });
     }
 
-    const sides = ['FOR', 'AGAINST'];
-    const debaterOneSide = sides[Math.floor(Math.random() * 2)];
-    const debaterTwoSide = debaterOneSide === 'FOR' ? 'AGAINST' : 'FOR';
+    // Side is fixed at creation on debater_one_side -- opponent always
+    // gets the opposite, no more coin flip here.
+    const debaterTwoSide: 'FOR' | 'AGAINST' = debate.debater_one_side === 'FOR' ? 'AGAINST' : 'FOR';
 
     const { data, error } = await supabase
       .from('debates')
       .update({
         debater_two_id: userId,
-        debater_one_side: debaterOneSide,
         debater_two_side: debaterTwoSide,
         status: 'in_progress',
         started_at: new Date().toISOString(),
@@ -125,7 +157,6 @@ export const joinRoom = async (req: AuthedRequest, res: Response) => {
   }
 };
 
-// Doc 3.2.3 / 3.3.4: dashboard lists open, publicly listed debate topics.
 export const getOpenDebates = async (req: Request, res: Response) => {
   try {
     const { data, error } = await supabase
@@ -180,10 +211,6 @@ export const getDebateByRoomId = async (req: AuthedRequest, res: Response) => {
   }
 };
 
-// Doc scope: a debate ends when the session concludes (time expires / both
-// turns complete) and transitions straight to AI verdict generation -- there
-// is no manually-declared winner_id here. The winner is decided by the AI
-// verdict module and stored on the verdicts table, not this one.
 export const endDebate = async (req: AuthedRequest, res: Response) => {
   try {
     const userId = req.userId;
@@ -230,9 +257,6 @@ export const endDebate = async (req: AuthedRequest, res: Response) => {
   }
 };
 
-// Doc extension: invites are pending debates where the current user is
-// debater_two. Listed separately from the open list so the dashboard can
-// show "X invited you" rather than mixing them into the public feed.
 export const getMyInvites = async (req: AuthedRequest, res: Response) => {
   try {
     const userId = req.userId;
@@ -287,14 +311,11 @@ export const acceptInvite = async (req: AuthedRequest, res: Response) => {
       return res.status(400).json({ error: 'This invite is no longer available' });
     }
 
-    const sides = ['FOR', 'AGAINST'];
-    const debaterOneSide = sides[Math.floor(Math.random() * 2)];
-    const debaterTwoSide = debaterOneSide === 'FOR' ? 'AGAINST' : 'FOR';
+    const debaterTwoSide: 'FOR' | 'AGAINST' = debate.debater_one_side === 'FOR' ? 'AGAINST' : 'FOR';
 
     const { data, error } = await supabase
       .from('debates')
       .update({
-        debater_one_side: debaterOneSide,
         debater_two_side: debaterTwoSide,
         status: 'in_progress',
         started_at: new Date().toISOString(),
@@ -360,10 +381,6 @@ export const declineInvite = async (req: AuthedRequest, res: Response) => {
   }
 };
 
-// Turn control: only the CURRENT speaker's client may end their own turn.
-// This is what makes it server-enforced rather than UI-toggled -- a client
-// cannot flip whose turn it is by calling this unless the backend already
-// considers them the active speaker AND their time has elapsed.
 export const advanceTurn = async (req: AuthedRequest, res: Response) => {
   try {
     const userId = req.userId;
@@ -394,7 +411,7 @@ export const advanceTurn = async (req: AuthedRequest, res: Response) => {
     const turnStartedMs = new Date(debate.turn_started_at).getTime();
     const now = Date.now();
     const elapsedMs = now - turnStartedMs;
-    const graceMs = 1000; // absorb client timer jitter/latency
+    const graceMs = 1000;
 
     if (elapsedMs < debate.turn_duration_seconds * 1000 - graceMs) {
       return res.status(400).json({ error: 'Turn time has not elapsed yet' });
