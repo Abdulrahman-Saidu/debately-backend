@@ -46,6 +46,40 @@ export const getUserProfile = async (req: Request, res: Response) => {
   }
 };
 
+// Powers the opponent picker on /create. Excludes the caller, matches
+// on username substring, capped at 20 rows so the picker stays fast.
+// No "online" concept exists on the users table -- that was mock-only,
+// don't reintroduce it here.
+export const searchUsers = async (req: AuthedRequest, res: Response) => {
+  try {
+    const userId = req.userId;
+    const q = ((req.query.q as string) || '').trim();
+
+    let query = supabase
+      .from('users')
+      .select('id, username, avatar_url, bio')
+      .neq('id', userId)
+      .order('username', { ascending: true })
+      .limit(20);
+
+    if (q) {
+      query = query.ilike('username', `%${q}%`);
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      console.error('[SEARCH USERS ERROR]', error);
+      return res.status(500).json({ error: error.message });
+    }
+
+    return res.status(200).json({ users: data });
+  } catch (err) {
+    console.error('[SEARCH USERS ERROR]', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
 export const updateProfile = async (req: AuthedRequest, res: Response) => {
   try {
     const userId = req.userId;
@@ -94,11 +128,6 @@ export const updateProfile = async (req: AuthedRequest, res: Response) => {
 
 // Doc scope: winner_id lives on verdicts, not debates -- join it in rather
 // than selecting a column that doesn't exist. No elo anywhere.
-//
-// room_id + debater_one/debater_two username joins were added so the
-// frontend (dashboard "Recent debates" + /profile history) can link to
-// /verdict?room_id=... and show a real opponent name instead of a raw id
-// or placeholder.
 export const getRecentDebates = async (req: AuthedRequest, res: Response) => {
   try {
     const userId = req.userId;
