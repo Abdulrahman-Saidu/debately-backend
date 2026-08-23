@@ -127,8 +127,6 @@ export const joinRoom = async (req: AuthedRequest, res: Response) => {
       return res.status(400).json({ error: 'You cannot join your own room' });
     }
 
-    // Side is fixed at creation on debater_one_side -- opponent always
-    // gets the opposite, no more coin flip here.
     const debaterTwoSide: 'FOR' | 'AGAINST' = debate.debater_one_side === 'FOR' ? 'AGAINST' : 'FOR';
 
     const { data, error } = await supabase
@@ -187,6 +185,14 @@ export const getOpenDebates = async (req: Request, res: Response) => {
   }
 };
 
+// FIX: now also returns server_time -- the server's own clock at the
+// moment of this response. This is the endpoint both the countdown page
+// and the arena poll every second, so it's the natural place for clients
+// to continuously correct for their own clock drift rather than trusting
+// their local Date.now() outright. A device running even a couple of
+// seconds fast was enough to make the arena's local countdown hit 0
+// before the server agreed the turn had actually elapsed, which caused
+// turn/advance to 400.
 export const getDebateByRoomId = async (req: AuthedRequest, res: Response) => {
   try {
     const { room_id } = req.params;
@@ -205,7 +211,7 @@ export const getDebateByRoomId = async (req: AuthedRequest, res: Response) => {
       return res.status(404).json({ error: 'Debate not found' });
     }
 
-    return res.status(200).json({ debate: data });
+    return res.status(200).json({ debate: data, server_time: new Date().toISOString() });
   } catch (err) {
     console.error('[GET DEBATE ERROR]', err);
     res.status(500).json({ error: 'Internal server error' });
@@ -251,9 +257,6 @@ export const endDebate = async (req: AuthedRequest, res: Response) => {
       return res.status(500).json({ error: error.message });
     }
 
-    // Fire-and-forget -- don't make the ending debater wait on OpenAI.
-    // Errors are logged, not surfaced here; the verdict endpoint can be
-    // retried manually if this fails.
     void generateVerdictForDebate(data.id).catch((err) =>
       console.error('[AUTO VERDICT ERROR]', err),
     );
