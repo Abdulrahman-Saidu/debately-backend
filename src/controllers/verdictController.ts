@@ -188,18 +188,35 @@ export const generateVerdict = async (req: AuthedRequest, res: Response) => {
   }
 };
 
+// FIX: returns 200 with { verdict: null } while generation just hasn't
+// finished yet, instead of 404. A 404 is indistinguishable from "this
+// debate_id is wrong" and also shows up as a big red failed-request line
+// in the browser's network console on every single poll -- purely
+// cosmetic noise, but avoidable. Still returns 404 for a debate_id that
+// truly doesn't exist, since that IS an error worth surfacing.
 export const getVerdict = async (req: AuthedRequest, res: Response) => {
   try {
     const { debate_id } = req.params;
+
+    const { data: debate, error: debateFetchError } = await supabase
+      .from('debates')
+      .select('id')
+      .eq('id', debate_id)
+      .maybeSingle();
+
+    if (debateFetchError || !debate) {
+      return res.status(404).json({ error: 'Debate not found' });
+    }
 
     const { data, error } = await supabase
       .from('verdicts')
       .select('*')
       .eq('debate_id', debate_id)
-      .single();
+      .maybeSingle();
 
-    if (error || !data) {
-      return res.status(404).json({ error: 'Verdict not found' });
+    if (error) {
+      console.error('[GET VERDICT ERROR]', error);
+      return res.status(500).json({ error: error.message });
     }
 
     return res.status(200).json({ verdict: data });
