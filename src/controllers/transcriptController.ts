@@ -53,18 +53,26 @@ export const saveSegment = async (req: AuthedRequest, res: Response) => {
   }
 };
 
+// FIX: added the same participant check saveSegment already had. Without
+// it, any authenticated user who knows a room_id could read that debate's
+// transcript -- not just the two debaters.
 export const getSegments = async (req: AuthedRequest, res: Response) => {
   try {
+    const userId = req.userId;
     const { room_id } = req.params;
 
     const { data: debate, error: debateError } = await supabase
       .from('debates')
-      .select('id')
+      .select('id, debater_one_id, debater_two_id')
       .eq('room_id', room_id)
       .single();
 
     if (debateError || !debate) {
       return res.status(404).json({ error: 'Debate not found' });
+    }
+
+    if (debate.debater_one_id !== userId && debate.debater_two_id !== userId) {
+      return res.status(403).json({ error: 'Not a participant in this debate' });
     }
 
     const { data, error } = await supabase
